@@ -62,8 +62,7 @@ export function toJSON(chapters: Chapter[], options: JSONExportOptions = {}): st
   return JSON.stringify({ version: 1, qualityControl: qc, chapters: data }, null, 2);
 }
 
-export function downloadFile(filename: string, content: string, mime: string): void {
-  const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+export function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -72,4 +71,8 @@ export function downloadFile(filename: string, content: string, mime: string): v
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+export function downloadFile(filename: string, content: string, mime: string): void {
+  downloadBlob(filename, new Blob([content], { type: `${mime};charset=utf-8` }));
 }

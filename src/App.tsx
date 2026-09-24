@@ -32,7 +32,8 @@ import {
   describeLockedAnchor,
   type ChainEditResult,
 } from './utils/chainOps';
-import { downloadFile, toJSON, toWebVTT } from './utils/export';
+import { downloadBlob, downloadFile, toJSON, toWebVTT } from './utils/export';
+import { buildChapterAudioPack } from './utils/audioPack';
 import {
   applyImportedChapters,
   buildImportPreview,
@@ -125,7 +126,7 @@ export default function App() {
   const transcriptTokenRef = useRef(0);
 
   /** 弹出一条临时提示；同一手势内相同 key 的提示不重复弹出。 */
-  const showNotice = useCallback((msg: string, key: string) => {
+  const showNotice = useCallback((msg: string, key: string, durationMs = 2200) => {
     if (noticeKeyRef.current === key) return;
     noticeKeyRef.current = key;
     setNotice(msg);
@@ -134,7 +135,7 @@ export default function App() {
       setNotice(null);
       noticeKeyRef.current = null;
       noticeTimerRef.current = null;
-    }, 2200);
+    }, durationMs);
   }, []);
 
   /**
@@ -621,6 +622,40 @@ export default function App() {
 
   const baseName = (fileName ?? 'podcast').replace(/\.[^.]+$/, '');
 
+  /**
+   * 章节音频包导出：点击时刻读取最新章节边界与当前已解码 AudioBuffer
+   *（二者来自同一次导入；切换音频后 currentBufferRef 指向新 buffer、
+   * 章节同时被重置，绝不会沿用旧数据）。全部 WAV 与 ZIP 编码成功后才
+   * 触发下载，失败 / 无有效片段只提示原因，不下载半成品。
+   */
+  const exportAudioPack = useCallback(() => {
+    const buffer = currentBufferRef.current;
+    if (!buffer) {
+      showNotice('尚未导入音频，无法导出章节音频包。', 'audiopack:nobuffer', 4000);
+      return;
+    }
+    try {
+      const pack = buildChapterAudioPack(chapters, buffer);
+      // pack.zip 是新建的精确尺寸 Uint8Array，其 buffer 即完整 ZIP 字节
+      downloadBlob(
+        `${baseName}.chapters.zip`,
+        new Blob([pack.zip.buffer as ArrayBuffer], { type: 'application/zip' }),
+      );
+      showNotice(
+        `已导出 ${pack.fileNames.length} 个章节音频（16-bit PCM WAV 打包为 ZIP）` +
+          (pack.skipped > 0 ? `，跳过 ${pack.skipped} 个越界 / 零长度章节` : '') +
+          '。',
+        `audiopack:ok:${Date.now()}`,
+      );
+    } catch (err) {
+      showNotice(
+        err instanceof Error ? err.message : '章节音频包导出失败，未下载任何文件。',
+        'audiopack:fail',
+        4000,
+      );
+    }
+  }, [chapters, baseName, showNotice]);
+
   return (
     <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <header className="app-header">
@@ -670,6 +705,13 @@ export default function App() {
           }
         >
           导出 JSON
+        </button>
+        <button
+          disabled={chapters.length === 0}
+          title="按当前章节起止时间从已解码音频截取，保留原声道与采样率编码为 16-bit PCM WAV，打成单个 ZIP"
+          onClick={exportAudioPack}
+        >
+          导出章节音频包
         </button>
       </header>
 

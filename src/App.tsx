@@ -32,7 +32,12 @@ import {
   describeLockedAnchor,
   type ChainEditResult,
 } from './utils/chainOps';
-import { downloadFile, toJSON, toWebVTT } from './utils/export';
+import { downloadBytes, downloadFile, toJSON, toWebVTT } from './utils/export';
+import {
+  ChapterAudioExportError,
+  buildChapterAudioPackage,
+  chapterPackageZipName,
+} from './utils/chapterAudioExport';
 import {
   applyImportedChapters,
   buildImportPreview,
@@ -123,6 +128,10 @@ export default function App() {
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   // 连续选择两个逐字稿时，先完成读取的旧文件不得覆盖新选择
   const transcriptTokenRef = useRef(0);
+
+  // 章节音频包导出：busy 防止重复点击；失败原因以横幅持续显示（非瞬时 toast）
+  const [exportingAudio, setExportingAudio] = useState(false);
+  const [audioExportError, setAudioExportError] = useState<string | null>(null);
 
   /** 弹出一条临时提示；同一手势内相同 key 的提示不重复弹出。 */
   const showNotice = useCallback((msg: string, key: string) => {
@@ -393,6 +402,9 @@ export default function App() {
     transcriptTokenRef.current += 1;
     setTranscript(null);
     setTranscriptError(null);
+    // 音频切换后旧 AudioBuffer 失效：清除上一次导出的失败提示与 busy 态
+    setExportingAudio(false);
+    setAudioExportError(null);
   }, [fileName]);
 
   // ---- 逐字稿：读取本地 WebVTT 并按当前时长裁剪；不会产生任何章节 ----
@@ -439,6 +451,58 @@ export default function App() {
     setTranscript(null);
     setTranscriptError(null);
   }, []);
+
+  /**
+   * 导出章节音频包：始终以**最新章节边界**（chapters 当前快照）与**当前
+   * 音频缓冲**（currentBufferRef，随导入替换）截取——切换音频后旧引用已
+   * 被新 buffer 顶替，绝不沿用旧 PCM。整包（所有章节 WAV + ZIP）构建
+   * 成功后才触发一次下载；无有效片段或任一编码步骤失败都只显示原因，
+   * 不会下载半成品。
+   */
+  const exportChapterAudio = useCallback(() => {
+    const buffer = currentBufferRef.current;
+    setAudioExportError(null);
+    if (!buffer) {
+      setAudioExportError('尚未导入音频，无法导出章节音频包。');
+      return;
+    }
+    const snapshot = chaptersApi.sortedChapters;
+    if (snapshot.length === 0) {
+      setAudioExportError('当前没有章节，请先创建章节后再导出音频包。');
+      return;
+    }
+    setExportingAudio(true);
+    // 与本次导出绑定当前 AudioBuffer：打包期间若切换了音频，
+    // currentBufferRef 已指向新缓冲，旧缓冲的结果作废（不下载）
+    // 延迟到下一帧再执行重活，让按钮的 busy 态先渲染出来
+    window.setTimeout(() => {
+      if (currentBufferRef.current !== buffer) {
+        setExportingAudio(false);
+        return;
+      }
+      try {
+        const pkg = buildChapterAudioPackage(buffer, snapshot);
+        if (currentBufferRef.current !== buffer) return;
+        const zipBase = (fileName ?? 'podcast').replace(/\.[^.]+$/, '');
+        downloadBytes(chapterPackageZipName(zipBase), pkg.zip, 'application/zip');
+        const skippedNote =
+          pkg.skipped > 0 ? `（已跳过 ${pkg.skipped} 个范围外 / 零时长章节）` : '';
+        showNotice(
+          `已导出 ${pkg.segments.length} 个章节 WAV（16-bit PCM，保留原声道与采样率）${skippedNote}。`,
+          `audio-export:${Date.now()}`,
+        );
+      } catch (err) {
+        if (currentBufferRef.current !== buffer) return;
+        const reason =
+          err instanceof ChapterAudioExportError
+            ? err.message
+            : `导出失败：${err instanceof Error ? err.message : '未知错误'}。未下载任何文件。`;
+        setAudioExportError(reason);
+      } finally {
+        if (currentBufferRef.current === buffer) setExportingAudio(false);
+      }
+    }, 0);
+  }, [chaptersApi, fileName, showNotice]);
 
   // 章节边界编辑（移动 / 缩放 / 增删 / 撤销重做）后即时重算：只依赖章节与逐字稿
   const transcriptCoverage = useMemo(
@@ -671,9 +735,34 @@ export default function App() {
         >
           导出 JSON
         </button>
+        <button
+          disabled={!peaks || chapters.length === 0 || exportingAudio}
+          title={
+            !peaks
+              ? '请先导入音频'
+              : chapters.length === 0
+                ? '请先创建章节'
+                : '按当前章节边界从已解码音频截取，逐章编码 16-bit PCM WAV 并打成 ZIP'
+          }
+          onClick={exportChapterAudio}
+        >
+          {exportingAudio ? '正在打包音频…' : '导出章节音频包'}
+        </button>
       </header>
 
       {decodeError && <div className="error-banner">{decodeError}</div>}
+      {audioExportError && (
+        <div className="error-banner audio-export-error" role="alert">
+          <span>{audioExportError}</span>
+          <button
+            className="banner-dismiss"
+            onClick={() => setAudioExportError(null)}
+            title="关闭提示"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {notice && <div className="chain-notice">{notice}</div>}
 
       {!peaks ? (

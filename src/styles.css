@@ -112,6 +112,28 @@ button.danger:hover:not(:disabled) {
   padding: 8px 16px;
 }
 
+.audio-export-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.banner-dismiss {
+  background: transparent;
+  border: 1px solid rgba(255, 215, 213, 0.4);
+  color: #ffd7d5;
+  border-radius: 4px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.banner-dismiss:hover {
+  border-color: #ffd7d5;
+}
+
 .drop-zone {
   flex: 1;
   display: flex;

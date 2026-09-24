@@ -73,3 +73,19 @@ export function downloadFile(filename: string, content: string, mime: string): v
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+/** Trigger a browser download for binary content (e.g. WAV / ZIP bytes). */
+export function downloadBytes(filename: string, data: Uint8Array, mime: string): void {
+  // copy into a fresh plain ArrayBuffer so the view is a definite BlobPart
+  const bytes = new Uint8Array(data.length);
+  bytes.set(data);
+  const blob = new Blob([bytes.buffer], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
